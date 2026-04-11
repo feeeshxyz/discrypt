@@ -84,7 +84,7 @@
 {/if}
 
 <div class="toolbar">
-  <button class="btn-keys btn-icon" onclick={() => { app.keysOpen = !app.keysOpen; if (app.keysOpen) app.settingsOpen = false; }} title="Keys">
+  <button class="btn-keys btn-icon" onclick={() => { app.activePanel = app.activePanel === "keys" ? null : "keys"; }} title="Keys">
     <KeyRound size={18} />
   </button>
   <button

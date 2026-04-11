@@ -3,6 +3,7 @@ mod crypto;
 mod store;
 
 use tauri::Manager;
+use tracing::error;
 
 
 #[tauri::command]
@@ -46,6 +47,11 @@ fn export_store() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn import_store(json_data: String, password: String) -> Result<(), String> {
+    store::import_store(&json_data, &password)
+}
+
+#[tauri::command]
 fn reset_store() -> Result<(), String> {
     store::reset_store()
 }
@@ -76,8 +82,8 @@ fn cdp_send_message(message: String, encrypt_for: Option<String>) -> Result<(), 
 }
 
 #[tauri::command]
-fn cdp_handshake() -> Result<cdp::HandshakeResult, String> {
-    cdp::handshake()
+fn cdp_handshake(app_handle: tauri::AppHandle) -> Result<cdp::HandshakeResult, String> {
+    cdp::handshake(app_handle)
 }
 
 #[tauri::command]
@@ -103,14 +109,24 @@ fn list_contacts() -> Result<Vec<store::ContactInfo>, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app
                 .path()
                 .app_data_dir()
-                .expect("Failed to get app data directory");
-            store::init(data_dir).expect("Failed to set store path");
+                .map_err(|e| {
+                    error!("Failed to get app data directory: {}", e);
+                    e
+                })?;
+            store::init(data_dir).map_err(|e| {
+                error!("Failed to set store path: {}", e);
+                Box::<dyn std::error::Error>::from(e)
+            })?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -122,6 +138,7 @@ pub fn run() {
             unlock_store,
             change_password,
             export_store,
+            import_store,
             reset_store,
             cdp_connect,
             check_discord_status,

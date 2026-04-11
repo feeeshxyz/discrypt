@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
 
-  import { app } from "./stores.svelte";
+  import { app, loadKeys } from "./stores.svelte";
 
   let changePwOld = $state("");
   let changePwNew = $state("");
@@ -10,6 +10,11 @@
   let changePwBusy = $state(false);
 
   let exportMsg = $state("");
+
+  let importData = $state("");
+  let importPassword = $state("");
+  let importMsg = $state("");
+  let importBusy = $state(false);
 
   async function changePassword() {
     changePwMsg = "";
@@ -49,6 +54,27 @@
     }
   }
 
+  async function importStore() {
+    importMsg = "";
+    const data = importData.trim();
+    const pw = importPassword;
+    if (!data) { importMsg = "Paste your backup data first."; return; }
+    if (!pw) { importMsg = "Enter backup password."; return; }
+    if (!confirm("This will replace your current keys and contacts. Continue?")) return;
+    importBusy = true;
+    try {
+      await invoke("import_store", { jsonData: data, password: pw });
+      importMsg = "Backup restored successfully!";
+      importData = "";
+      importPassword = "";
+      await loadKeys();
+    } catch (e: any) {
+      importMsg = e?.toString() ?? "Import failed";
+    } finally {
+      importBusy = false;
+    }
+  }
+
   async function resetAll() {
     if (!confirm("This will delete all keys and contacts. Are you sure?")) return;
     if (!confirm("This action cannot be undone. Really delete everything?")) return;
@@ -63,8 +89,8 @@
 
 </script>
 
-{#if app.settingsOpen}
-<div class="settings-panel">
+{#if app.activePanel === "settings"}
+<div class="settings-panel-content">
   <div class="settings-section">
     <h3>Change Password</h3>
     <input type="password" placeholder="Current password" bind:value={changePwOld} disabled={changePwBusy} />
@@ -80,6 +106,16 @@
     <h3>Backup</h3>
     <button class="btn-small" onclick={exportStore}>Copy Backup to Clipboard</button>
     {#if exportMsg}<p class="settings-msg">{exportMsg}</p>{/if}
+  </div>
+
+  <div class="settings-section">
+    <h3>Import Backup</h3>
+    <textarea class="import-textarea" bind:value={importData} placeholder="Paste backup JSON here…" disabled={importBusy} rows="3"></textarea>
+    <input type="password" placeholder="Backup password" bind:value={importPassword} disabled={importBusy} />
+    <button class="btn-small" onclick={importStore} disabled={importBusy}>
+      {importBusy ? "Importing…" : "Import Backup"}
+    </button>
+    {#if importMsg}<p class="settings-msg">{importMsg}</p>{/if}
   </div>
 
   <div class="settings-section danger">

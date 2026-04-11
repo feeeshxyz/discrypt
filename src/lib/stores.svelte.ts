@@ -37,8 +37,7 @@ class AppState {
   dmUsernames: string[] = $state([]);
   contacts: ContactInfo[] = $state([]);
   myPublicKey = $state("Loading…");
-  keysOpen = $state(false);
-  settingsOpen = $state(false);
+  activePanel: "keys" | "settings" | null = $state(null);
 }
 
 export const app = new AppState();

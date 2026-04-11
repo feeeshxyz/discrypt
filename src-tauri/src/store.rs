@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tracing::{info, warn};
 use zeroize::Zeroize;
 
 
@@ -104,7 +105,7 @@ fn encrypt_json(json: &str, enc_key: &[u8; 32]) -> Result<(String, String), Stri
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
         .encrypt(&nonce, json.as_bytes())
-        .map_err(|_| "Store encryption failed".to_string())?;
+        .map_err(|e| format!("Store encryption failed: {}", e))?;
     Ok((hex_encode(&nonce), BASE64.encode(&ciphertext)))
 }
 
@@ -117,8 +118,13 @@ fn decrypt_json(nonce_hex: &str, ciphertext_b64: &str, enc_key: &[u8; 32]) -> Re
     let cipher = Aes256Gcm::new(key);
     let plaintext = cipher
         .decrypt(nonce, ciphertext.as_ref())
-        .map_err(|_| "Wrong password or corrupted store.".to_string())?;
-    String::from_utf8(plaintext).map_err(|e| format!("UTF-8 decode failed: {}", e))
+        .map_err(|_| "Wrong password. Decryption failed.".to_string())?;
+    let text = String::from_utf8(plaintext)
+        .map_err(|e| format!("Corrupted store: decrypted data is not valid UTF-8: {}", e))?;
+    // Validate it's actually JSON before returning
+    serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|_| "Corrupted store: decrypted data is not valid JSON.".to_string())?;
+    Ok(text)
 }
 
 
@@ -319,6 +325,7 @@ pub fn create_store(password: &str) -> Result<(), String> {
     let store = KeyStore::create_new(file_path, password)?;
     let mut global = KEY_STORE.lock().map_err(|e| format!("Lock error: {}", e))?;
     *global = Some(store);
+    info!("New key store created");
     Ok(())
 }
 
@@ -332,8 +339,10 @@ pub fn unlock_store(password: &str) -> Result<(), String> {
     }
 
     let store = KeyStore::decrypt_and_load(file_path, password)?;
+    let contact_count = store.contacts.len();
     let mut global = KEY_STORE.lock().map_err(|e| format!("Lock error: {}", e))?;
     *global = Some(store);
+    info!("Store unlocked ({} contacts)", contact_count);
     Ok(())
 }
 
@@ -448,7 +457,7 @@ pub fn encrypt_for(username: &str, plaintext: &str) -> Result<String, String> {
         .contacts
         .get(username)
         .ok_or_else(|| format!("Contact '{}' not found", username))?;
-    crypto::encrypt(plaintext, &contact.shared_secret)
+    crypto::encrypt(plaintext, &contact.shared_secret).map_err(|e| e.to_string())
 }
 
 pub fn set_handshake_status(username: &str, status: &str) -> Result<(), String> {
@@ -468,10 +477,59 @@ pub fn try_decrypt(ciphertext: &str) -> Option<String> {
     }
     let store = KEY_STORE.lock().ok()?;
     let store = store.as_ref()?;
-    for contact in store.contacts.values() {
-        if let Some(plaintext) = crypto::decrypt(ciphertext, &contact.shared_secret) {
-            return Some(plaintext);
+    for (username, contact) in &store.contacts {
+        match crypto::decrypt(ciphertext, &contact.shared_secret) {
+            Ok(plaintext) => return Some(plaintext),
+            Err(crypto::CryptoError::DecryptionFailed) => {
+                // Wrong key for this contact, try next
+                continue;
+            }
+            Err(e) => {
+                warn!("Decrypt error for contact '{}': {}", username, e);
+                continue;
+            }
         }
     }
     None
+}
+
+pub fn import_store(json_data: &str, password: &str) -> Result<(), String> {
+    // Validate it's a valid EncryptedStore
+    let enc: EncryptedStore = serde_json::from_str(json_data)
+        .map_err(|e| format!("Invalid backup format: {}", e))?;
+
+    // Validate salt, nonce, ciphertext are valid hex/base64
+    let salt_bytes = hex_decode(&enc.salt)?;
+    let salt: [u8; 16] = salt_bytes.try_into()
+        .map_err(|_| "Invalid salt length in backup".to_string())?;
+
+    // Try to decrypt with provided password to validate
+    let enc_key = derive_key(password, &salt)?;
+    let json = decrypt_json(&enc.nonce, &enc.ciphertext, &enc_key)?;
+
+    // Validate inner structure
+    let sf: StoreFile = serde_json::from_str(&json)
+        .map_err(|e| format!("Backup contains invalid key data: {}", e))?;
+    let _ = to_32(&hex_decode(&sf.secret_key)?)?;
+    let _ = to_32(&hex_decode(&sf.public_key)?)?;
+
+    // All valid — write to disk
+    let path_guard = STORE_PATH.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let file_path = path_guard.as_ref().ok_or("Store path not initialized")?.clone();
+    drop(path_guard);
+
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create data directory: {}", e))?;
+    }
+    std::fs::write(&file_path, json_data)
+        .map_err(|e| format!("Failed to write backup to store: {}", e))?;
+
+    // Load it into memory
+    let store = KeyStore::decrypt_and_load(file_path, password)?;
+    let mut global = KEY_STORE.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *global = Some(store);
+
+    info!("Store imported successfully from backup");
+    Ok(())
 }

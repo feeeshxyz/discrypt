@@ -38,8 +38,8 @@
   }
 </script>
 
-{#if app.keysOpen}
-  <div class="keys-panel">
+{#if app.activePanel === "keys"}
+  <div class="keys-panel-content">
     <div class="keys-section">
       <h3>Your Public Key</h3>
       <div class="key-display">

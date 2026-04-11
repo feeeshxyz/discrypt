@@ -920,7 +920,9 @@ pub fn send_message(message: &str, encrypt_for: Option<&str>) -> Result<(), Stri
     send_message_via_cdp(&text_to_send)
 }
 
-pub fn handshake() -> Result<HandshakeResult, String> {
+pub fn handshake(app_handle: tauri::AppHandle) -> Result<HandshakeResult, String> {
+    let _ = app_handle.emit("handshake-step", "Analyzing pinned messages…");
+
     let resp = send_cdp_command(
         "Runtime.evaluate",
         json!({
@@ -955,6 +957,8 @@ pub fn handshake() -> Result<HandshakeResult, String> {
     let mut contact_added: Option<String> = None;
     let mut our_key_present = analysis.our_key_present;
 
+    let _ = app_handle.emit("handshake-step", "Looking for their key…");
+
     for key_info in &analysis.their_keys {
         if key_info.username == "__unknown__" {
             if key_info.key_hex == my_pubkey {
@@ -973,10 +977,13 @@ pub fn handshake() -> Result<HandshakeResult, String> {
     }
 
     let key_sent = if !our_key_present {
+        let _ = app_handle.emit("handshake-step", "Sending your key…");
         let key_msg = format!("[DISCRYPT-KEY]{}", my_pubkey);
 
         send_message_via_cdp(&key_msg)?;
         std::thread::sleep(Duration::from_millis(800));
+
+        let _ = app_handle.emit("handshake-step", "Pinning key message…");
 
         match pin_last_key_message() {
             Ok(true) => {

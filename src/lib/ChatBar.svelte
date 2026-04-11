@@ -1,9 +1,12 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { onMount } from "svelte";
   import { app, setStatus, loadKeys, type HandshakeResult } from "./stores.svelte";
   import { Lock, Handshake, Loader, SendHorizonal } from "lucide-svelte";
 
   let chatText = $state("");
+  let handshakeStep = $state("");
 
   let encryptTarget = $derived.by(() => {
     for (const u of app.dmUsernames) {
@@ -16,6 +19,13 @@
     if (!encryptTarget) return false;
     const c = app.contacts.find((c) => c.username === encryptTarget);
     return c?.handshake_status === "complete";
+  });
+
+  onMount(() => {
+    const unlisten = listen<string>("handshake-step", (event) => {
+      handshakeStep = event.payload;
+    });
+    return () => { unlisten.then((f) => f()); };
   });
 
   async function doSend() {
@@ -32,11 +42,16 @@
 
   async function doHandshake() {
     app.handshaking = true;
+    handshakeStep = "Starting…";
     try {
       const result = await invoke<HandshakeResult>("cdp_handshake");
       await loadKeys();
+      handshakeStep = "";
       setStatus("connected", result.message);
-    } catch (_) {}
+    } catch (e: any) {
+      handshakeStep = "Failed: " + (e?.toString() ?? "Unknown error");
+      setTimeout(() => { handshakeStep = ""; }, 5000);
+    }
     app.handshaking = false;
   }
 
@@ -47,6 +62,18 @@
     }
   }
 </script>
+
+{#if handshakeStep && app.handshaking}
+  <div class="handshake-progress">
+    <Loader size={14} />
+    <span>{handshakeStep}</span>
+  </div>
+{:else if handshakeStep && !app.handshaking}
+  <div class="handshake-progress" class:failed={handshakeStep.startsWith("Failed")}>
+    <span>{handshakeStep}</span>
+    <button class="btn-handshake-retry" onclick={doHandshake}>Retry</button>
+  </div>
+{/if}
 
 <div class="chat-bar">
   {#if isEncrypted}

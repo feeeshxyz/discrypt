@@ -13,6 +13,8 @@
 
   let dmRecipient = $derived(app.dmUsernames.length > 0 ? app.dmUsernames[0] : "");
 
+  const MAX_MESSAGES = 500;
+
   let unlocked = $state(false);
   let messageList: MessageList;
 
@@ -30,7 +32,8 @@
     loadKeys();
 
     listen<FetchResult>("cdp-messages-updated", (event) => {
-      app.messages = event.payload.messages;
+      const msgs = event.payload.messages;
+      app.messages = msgs.length > MAX_MESSAGES ? msgs.slice(-MAX_MESSAGES) : msgs;
       app.dmUsernames = event.payload.dm_usernames || [];
       messageList?.autoScroll();
     });
@@ -51,8 +54,7 @@
 
     function onGlobalKeydown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        if (app.settingsOpen) { app.settingsOpen = false; return; }
-        if (app.keysOpen) { app.keysOpen = false; return; }
+        if (app.activePanel) { app.activePanel = null; return; }
       }
     }
     window.addEventListener("keydown", onGlobalKeydown);
@@ -66,7 +68,7 @@
 <div class="app">
   <header>
     <h1>Discrypt {#if dmRecipient} <span class="header-recipient"> - {dmRecipient}</span>{/if}</h1>
-    <button class="btn-header-settings btn-icon" onclick={() => { app.settingsOpen = !app.settingsOpen; if (app.settingsOpen) app.keysOpen = false; }} title="Settings">
+    <button class="btn-header-settings btn-icon" onclick={() => { app.activePanel = app.activePanel === "settings" ? null : "settings"; }} title="Settings">
       <SettingsIcon size={18} />
     </button>
   </header>
@@ -75,8 +77,19 @@
 
   <div class="content-area">
     <MessageList bind:this={messageList} />
-    <KeysPanel />
-    <Settings />
+    {#if app.activePanel}
+      <div class="side-panel">
+        <div class="panel-tabs">
+          <button class="panel-tab" class:active={app.activePanel === "keys"} onclick={() => { app.activePanel = app.activePanel === "keys" ? null : "keys"; }}>Keys</button>
+          <button class="panel-tab" class:active={app.activePanel === "settings"} onclick={() => { app.activePanel = app.activePanel === "settings" ? null : "settings"; }}>Settings</button>
+        </div>
+        {#if app.activePanel === "keys"}
+          <KeysPanel />
+        {:else}
+          <Settings />
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <ChatBar />
